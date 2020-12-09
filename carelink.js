@@ -9,10 +9,12 @@ var _ = require('lodash'),
 
 var logger = require('./logger');
 
-var CARELINK_EU = process.env['MMCONNECT_SERVER'] === 'EU';
+var MMCONNECT_SERVER = process.env['MMCONNECT_SERVER'];
+var CARELINK_EU = MMCONNECT_SERVER === 'EU';
+var MMCONNECT_SERVERNAME = process.env['MMCONNECT_SERVERNAME'];
 
 var DEFAULT_MAX_RETRY_DURATION = module.exports.defaultMaxRetryDuration = 512;
-var carelinkServerAddress = CARELINK_EU ? "carelink.minimed.eu" : "carelink.minimed.com";
+var carelinkServerAddress = MMCONNECT_SERVERNAME || (CARELINK_EU ? "carelink.minimed.eu" : "carelink.minimed.com");
 
 var CARELINKEU_LOGIN_URL = 'https://' + carelinkServerAddress + '/patient/sso/login?country=gb&lang=en';
 var CARELINKEU_REFRESH_TOKEN_URL = 'https://' + carelinkServerAddress + '/patient/sso/reauth';
@@ -53,6 +55,10 @@ var Client = exports.Client = function (options) {
 
     if (options.maxRetryDuration === undefined) {
         options.maxRetryDuration = DEFAULT_MAX_RETRY_DURATION;
+    }
+
+    function retryDurationOnAttempt(n) {
+        return Math.pow(2, n);
     }
 
     function getCookies() {
@@ -211,31 +217,29 @@ var Client = exports.Client = function (options) {
     }
 
     async function fetch(callback) {
+        let data = null;
+        let error = null;
         try {
-            let maxRetry = 3;
+            let maxRetry = 1;
             for (let i = 1; i <= maxRetry; i++) {
-                await checkLogin();
                 try {
-                    let response = await getConnectData();
-                    callback(null, response.data);
-                    return;
+                    await checkLogin();
+                    data = (await getConnectData()).data;
+                    break;
                 } catch (e1) {
+                    cookieJar.removeAllCookiesSync();
+
                     if (i === maxRetry)
                         throw e1;
-
-                    if (e1.response && e1.response.status === 401) {
-                        // reauth
-                        cookieJar.removeAllCookiesSync();
-                    }
 
                     let timeout = retryDurationOnAttempt(i);
                     await sleep(1000 * timeout);
                 }
             }
-
-            throw new Error('Failed to download Carelink data');
         } catch (e) {
-            callback(`${e.toString()}\nstack: ${e.stack}`, null);
+            error = `${e.toString()}\nstack: ${e.stack}`;
+        } finally {
+            callback(error, data);
         }
     }
 
